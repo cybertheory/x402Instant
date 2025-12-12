@@ -1,124 +1,96 @@
 /**
  * x402Fetch - Fetch wrapper that handles 402 payment challenges
+ * Uses fastx402-ts X402Client under the hood
+ * 
+ * This integrates fastx402-ts client with x402instant's signPaymentChallenge
+ * which handles both instant mode (user's wallet) and embedded mode (WAAS providers)
  */
 
 import type { PaymentChallenge, PaymentSignature } from "./types";
-import { getDefaultWallet, connectWallet, switchNetwork } from "./wallet";
-import { signPayment, signPaymentWithProvider } from "./signer";
+import { signPaymentChallenge } from "./core";
+import { X402Client } from "fastx402";
+import { getConfig } from "./core";
 
-let currentWallet: any = null;
-let currentAddress: string | null = null;
-
-/**
- * Set the current wallet
- */
-export function setWallet(wallet: any, address: string | null) {
-  currentWallet = wallet;
-  currentAddress = address;
-}
+let clientInstance: X402Client | null = null;
 
 /**
- * Handle 402 payment challenge
+ * Handle 402 payment challenge using x402instant's signPaymentChallenge
+ * This automatically handles both instant and embedded modes based on config
  */
 async function handle402Challenge(
   challenge: PaymentChallenge
 ): Promise<PaymentSignature | null> {
-  // Get or connect wallet
-  if (!currentWallet) {
-    const wallet = await getDefaultWallet();
-    if (!wallet) {
-      throw new Error("No wallet available");
-    }
-
-    const address = await connectWallet(wallet);
-    if (!address) {
-      throw new Error("Failed to connect wallet");
-    }
-
-    currentWallet = wallet.provider;
-    currentAddress = address;
-  }
-
-  // Switch network if needed
-  await switchNetwork(currentWallet, challenge.chain_id);
-
-  // Try signing with ethers first (if available)
-  try {
-    const { ethers } = await import("ethers");
-    if (ethers && ethers.BrowserProvider) {
-      const provider = new ethers.BrowserProvider(currentWallet);
-      const signed = await signPayment(challenge, provider);
-      if (signed) return signed;
-    }
-  } catch (error) {
-    console.warn("Ethers signing failed, trying provider method:", error);
-  }
-
-  // Fallback to provider.request
-  if (currentAddress) {
-    return await signPaymentWithProvider(
-      challenge,
-      currentWallet,
-      currentAddress
-    );
-  }
-
-  return null;
+  // Use x402instant's signPaymentChallenge which handles both modes
+  // - Instant mode: uses user's wallet
+  // - Embedded mode: uses configured WAAS provider
+  return await signPaymentChallenge(challenge);
 }
 
 /**
- * Create X-PAYMENT header from signature
+ * Get or create X402Client instance
+ * Automatically uses x402instant's signPaymentChallenge for both modes
  */
-function createPaymentHeader(signature: PaymentSignature): string {
-  return JSON.stringify({
-    signature: signature.signature,
-    signer: signature.signer,
-    challenge: signature.challenge,
-  });
+function getClient(): X402Client {
+  if (!clientInstance) {
+    const config = getConfig();
+    
+    // Create client with rpcHandler that uses x402instant's signPaymentChallenge
+    // This ensures both instant and embedded modes work correctly
+    clientInstance = new X402Client({
+      rpcHandler: handle402Challenge,
+      mode: config.mode || "instant", // Pass mode from config
+    });
+  }
+  return clientInstance;
+}
+
+/**
+ * Reset client instance (useful when config changes)
+ */
+export function resetClient(): void {
+  clientInstance = null;
+}
+
+/**
+ * Set the current wallet (for backward compatibility)
+ * Note: This is handled by x402instant's core signPaymentChallenge now
+ */
+export function setWallet(wallet: any, address: string | null): void {
+  // Wallet is managed by x402instant's core functionality
+  // This function is kept for backward compatibility
+  // Reset client to pick up any config changes
+  resetClient();
 }
 
 /**
  * x402Fetch - Fetch wrapper that handles 402 challenges
+ * Uses fastx402-ts X402Client under the hood
+ * 
+ * Automatically integrates with x402instant's signPaymentChallenge
+ * which handles both instant mode (user's wallet) and embedded mode (WAAS)
+ * 
+ * @example
+ * ```ts
+ * import { initX402, x402Fetch } from 'x402instant';
+ * 
+ * // Initialize with instant mode (default)
+ * await initX402({ mode: 'instant' });
+ * 
+ * // Or initialize with embedded mode
+ * await initX402({ 
+ *   mode: 'embedded',
+ *   waasProvider: privyProvider 
+ * });
+ * 
+ * // Make requests - automatically handles 402 challenges
+ * const response = await x402Fetch('https://api.example.com/paid');
+ * ```
  */
 export async function x402Fetch(
   url: string,
   options: RequestInit = {}
 ): Promise<Response> {
-  // Make initial request
-  let response = await fetch(url, options);
-
-  // Handle 402 Payment Required
-  if (response.status === 402) {
-    try {
-      const data = await response.json();
-      const challenge = data.challenge as PaymentChallenge;
-
-      if (!challenge) {
-        throw new Error("Invalid 402 challenge format");
-      }
-
-      // Sign payment
-      const signature = await handle402Challenge(challenge);
-
-      if (!signature) {
-        throw new Error("Failed to sign payment");
-      }
-
-      // Retry request with X-PAYMENT header
-      const paymentHeader = createPaymentHeader(signature);
-      const headers = new Headers(options.headers);
-      headers.set("X-PAYMENT", paymentHeader);
-
-      response = await fetch(url, {
-        ...options,
-        headers,
-      });
-    } catch (error) {
-      console.error("Failed to handle 402 challenge:", error);
-      throw error;
-    }
-  }
-
-  return response;
+  const client = getClient();
+  return client.request(url, options);
 }
 

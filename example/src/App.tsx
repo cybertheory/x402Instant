@@ -1,19 +1,22 @@
-import { useState } from "react";
-import { initX402, x402Fetch, detectWallets } from "x402instant";
+import { useState, useRef } from "react";
+import { initX402, detectWallets, signPaymentChallenge } from "x402instant";
 import type { WalletInfo } from "x402instant";
+import { X402Client } from "fastx402";
+import type { PaymentChallenge, PaymentSignature } from "fastx402";
 
 function App() {
   const [wallets, setWallets] = useState<WalletInfo[]>([]);
   const [connected, setConnected] = useState(false);
   const [response, setResponse] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+  const clientRef = useRef<X402Client | null>(null);
 
   const handleInit = async () => {
     await initX402({
       autoConnect: true,
       defaultChain: 8453,
       preferredToken: "USDC",
-      onWalletConnected: (addr) => {
+      onWalletConnected: (addr: string) => {
         console.log("Wallet connected:", addr);
         setConnected(true);
       },
@@ -21,13 +24,25 @@ function App() {
 
     const detected = await detectWallets();
     setWallets(detected);
+
+    // Initialize X402Client with signPaymentChallenge as the RPC handler
+    clientRef.current = new X402Client({
+      rpcHandler: async (challenge: PaymentChallenge): Promise<PaymentSignature | null> => {
+        return await signPaymentChallenge(challenge);
+      },
+    });
   };
 
   const handlePaidRequest = async () => {
+    if (!clientRef.current) {
+      setResponse({ error: "Client not initialized. Please click 'Initialize x402' first." });
+      return;
+    }
+
     setLoading(true);
     try {
       // Replace with your API endpoint
-      const res = await x402Fetch("http://localhost:8000/paid");
+      const res = await clientRef.current.request("http://localhost:8001/paid");
       const data = await res.json();
       setResponse(data);
     } catch (error: any) {

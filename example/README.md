@@ -41,3 +41,4 @@ const res = await x402Fetch("http://localhost:8000/paid");
 
 Make sure your backend server (fastx402) is running on the configured port.
 
+

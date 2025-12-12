@@ -23,11 +23,38 @@ pnpm add x402instant
 
 ### 1. Initialize
 
+**Instant Mode (default - user wallet):**
 ```typescript
 import { initX402, x402Fetch } from "x402instant";
 
 await initX402({
   autoConnect: true,
+  defaultChain: 8453,
+  preferredToken: "USDC",
+  mode: "instant", // Optional, default
+  // WebSocket backend connection (optional - auto-connects if backend is running)
+  wsBackendUrl: "ws://localhost:4021/x402/ws", // Optional: defaults to env var or localhost:4021
+  wsAutoConnect: true, // Optional: default true - automatically connect to backend
+  wsReconnect: true, // Optional: default true - durable connection with auto-reconnect
+});
+```
+
+**Embedded Mode (WAAS provider):**
+```typescript
+import { initX402, x402Fetch, PrivyWAASProvider } from "x402instant";
+
+// Initialize Privy (or other WAAS provider)
+const privyClient = new PrivyClient({ appId: "your-app-id" });
+await privyClient.ready();
+
+const waasProvider = new PrivyWAASProvider({
+  appId: "your-app-id",
+  privyClient: privyClient
+});
+
+await initX402({
+  mode: "embedded",
+  waasProvider: waasProvider,
   defaultChain: 8453,
   preferredToken: "USDC"
 });
@@ -45,6 +72,30 @@ That's it! The library automatically handles:
 - 402 challenge detection
 - Payment signing with EIP-712
 - Request retry with payment headers
+
+## Payment Modes
+
+### Instant Mode (Default)
+
+Uses the user's own wallet (MetaMask, WalletConnect, etc.) to sign payments.
+
+**Features**:
+- Direct wallet integration
+- User controls their own keys
+- No additional services required
+- Works with any EIP-1193 compatible wallet
+
+### Embedded Mode
+
+Uses Wallet-as-a-Service (WAAS) providers like Privy for embedded wallet signing.
+
+**Features**:
+- Simplified onboarding (no wallet extension needed)
+- Embedded wallet management
+- Server-side wallet backup (via WAAS provider)
+- Works without browser extensions
+
+**Note**: Mode is configured when calling `initX402()`. The server always verifies signatures the same way regardless of mode.
 
 ## Core Architecture
 
@@ -179,14 +230,34 @@ await initX402({
 
 #### `initX402(config?)`
 
-Initialize the x402 SDK with optional configuration.
+Initialize the x402 SDK with optional configuration. Automatically connects to backend WebSocket server if configured.
+
+**Configuration Options:**
+- `wsBackendUrl` (optional): WebSocket URL for backend server (default: `ws://localhost:4021/x402/ws` or from env var)
+- `wsAutoConnect` (optional): Automatically connect to backend WebSocket (default: `true`)
+- `wsReconnect` (optional): Auto-reconnect on disconnect (default: `true`)
+- `wsMaxReconnectAttempts` (optional): Max reconnect attempts (default: `Infinity` for durable connection)
+
+**Environment Variables:**
+- `X402_WS_BACKEND_URL` or `VITE_X402_WS_BACKEND_URL`: WebSocket backend URL
 
 ```typescript
+// Basic initialization
 await initX402({
   autoConnect: true,
   defaultChain: 8453
 });
+
+// With WebSocket backend connection (for backend Python client)
+await initX402({
+  autoConnect: true,
+  wsBackendUrl: "ws://localhost:4021/x402/ws", // Optional
+  wsAutoConnect: true, // Automatically connect in background
+  wsReconnect: true, // Durable connection with auto-reconnect
+});
 ```
+
+**Note**: When `wsAutoConnect` is enabled (default), x402instant automatically establishes a durable WebSocket connection to the backend client's WebSocket server in the background. This allows backend Python clients (fastx402) to request payment signatures via WebSocket.
 
 #### `x402Fetch(url, options?)`
 
@@ -414,7 +485,7 @@ TypeScript interfaces for type safety:
 - **`PaymentChallenge`**: Payment challenge structure
 - **`PaymentSignature`**: Signed payment payload
 - **`WalletInfo`**: Wallet information and provider
-- **`X402Config`**: Configuration options
+- **`X402Config`**: Configuration options including WebSocket backend connection
 - **`EIP6963ProviderInfo`**: EIP-6963 provider information
 
 ## Dependencies
